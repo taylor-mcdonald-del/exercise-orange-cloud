@@ -26,7 +26,7 @@ Rules:
 - If you have no tools available, say you are not on the net yet.
 - Be brief and factual, as a good watchkeeper is. Plain text, no emoji, no sign-offs like "let me know if you need anything else".`;
 
-/** Phase 4: extra orders once a partner cell is linked (TODO 3). Sharpen them. */
+/** Phase 4: extra orders once a partner cell is linked. Sharpen them. */
 function jointOrders(partner: PartnerLink | null): string {
   if (!partner) return "";
   return `
@@ -39,23 +39,8 @@ Joint tasking. Your partner cell is ${partner.callsign}, a ${partner.roleLabel.t
 }
 
 /**
- * PHASES 3 AND 4: your watchkeeper
- * ================================
- *
- * Open /chat on your Worker and say hello. The watchkeeper can talk, but
- * can't do anything yet: it isn't on the net. Two changes fix that (Phase 3):
- *
- *   TODO 1  connect to your MCP server with this.addMcpServer(...)
- *   TODO 2  hand the model your MCP tools with this.mcp.getAITools()
- *
- * Then ask it to raise a request and watch your ops board.
- *
- * Phase 4 adds a second MCP server, your partner cell's:
- *
- *   TODO 3  link to your partner with partnerCell(...) and this.addMcpServer(...)
- *
- * Stuck? `npm run skip:agent` finishes Phase 3 and `npm run skip:joint`
- * finishes Phase 4 (your file is backed up to src/agent.ts.bak first).
+ * Phase 4, finished: a watchkeeper that runs your ops room through your MCP
+ * server and hands work to your partner cell through theirs.
  *
  * Each chat session gets its own Watchkeeper instance. It's a Durable Object,
  * so it keeps its state (the conversation) between messages.
@@ -69,44 +54,40 @@ export class Watchkeeper extends Agent<Env, ChatState> {
   }
 
   async chat(message: string, origin: string): Promise<ChatReply> {
-    // TODO 1 (Phase 3): connect to your own MCP server, the same way Cloudflare OS did.
-    // Uncomment this. The id makes your tools show up as tool_cell_<name>, and
-    // the headers tell the ops board the calls come from your watchkeeper.
-    //
-    // await this.addMcpServer("cell", `${origin}/mcp`, {
-    //   id: "cell",
-    //   transport: {
-    //     type: "streamable-http",
-    //     headers: { "x-cell-client": "agent", "x-cell-origin": origin }
-    //   }
-    // });
+    // 1. Connect to your own MCP server, the same way Cloudflare OS did.
+    //    The id makes your tools show up as tool_cell_<name>. The headers tell
+    //    the ops board these calls come from your watchkeeper.
+    //    (Safe to call every time: it reuses the existing connection.)
+    await this.addMcpServer("cell", `${origin}/mcp`, {
+      id: "cell",
+      transport: {
+        type: "streamable-http",
+        headers: { "x-cell-client": "agent", "x-cell-origin": origin }
+      }
+    });
 
-    // TODO 3 (Phase 4): link to your partner cell, the one set on your ops board.
-    // Delete the next line and uncomment the block under it. Your watchkeeper
-    // then holds two MCP servers at once: yours and theirs.
-    const partner: PartnerLink | null = null;
-    //
-    // const partner = await partnerCell(this, origin);
-    // if (partner) {
-    //   await this.addMcpServer("partner", partner.mcpUrl, {
-    //     id: "partner",
-    //     transport: { type: "streamable-http", headers: partner.headers }
-    //   });
-    // }
+    // 2. Link to your partner cell, the one set on your ops board. Your
+    //    watchkeeper now holds two MCP servers at once: yours and theirs.
+    const partner = await partnerCell(this, origin);
+    if (partner) {
+      await this.addMcpServer("partner", partner.mcpUrl, {
+        id: "partner",
+        transport: { type: "streamable-http", headers: partner.headers }
+      });
+    }
 
-    // Ask the model. It sees the conversation so far and, once you've done
-    // TODO 2, every tool from every MCP server you've connected. The SDK runs
-    // the tools the model picks and feeds the results back until it has an answer.
+    // 3. Give the model the conversation so far plus every tool from every
+    //    connected MCP server. The model picks tools, the SDK runs them over
+    //    MCP and feeds the results back, round after round, until it has an answer.
     const result = await generateText({
       model: chatModel(this.env),
       system: SYSTEM_PROMPT + jointOrders(partner),
       messages: toModelMessages(this.state.messages, message),
-      // TODO 2 (Phase 3): give the model your MCP tools. Uncomment the next line.
-      // tools: this.mcp.getAITools(),
+      tools: this.mcp.getAITools(),
       stopWhen: isStepCount(10)
     });
 
-    // Remember the conversation. setState saves it in this agent's storage.
+    // 4. Remember the conversation. setState saves it in this agent's storage.
     const tools = traceTools(this, result.steps);
     this.setState(rememberTurn(this.state, message, result.text, tools));
 
